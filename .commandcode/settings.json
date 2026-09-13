@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(C:\\Users\\Rajesh\\AppData\\Local\\Programs\\Python\\Python312\\python.exe:*)",
+      "Shell(python --version)",
+      "Shell(python -c import streamlit, requests, dotenv; print('streamlit', streamlit.__version__); print('requests', requests.__version__); print('dotenv ok'))",
+      "powershell"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}
