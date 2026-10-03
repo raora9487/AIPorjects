@@ -5,3 +5,4 @@
 - Prefers the agent to proceed autonomously and make reasonable assumptions rather than asking many clarifying questions before acting ("don't ask me everything, just do whatever is needed"). Confidence: 0.8
 - Uses locally hosted Ollama models for LLM inference (via its local HTTP API) instead of cloud LLM APIs, with Jira Cloud as the issue data source. Confidence: 0.5
 - Keeps credentials/configuration in a `.env` file rather than hard-coded in source, and expects configuration to be discovered/loaded from it. Confidence: 0.5
+- Delegates git commits and pushes to GitHub to the agent rather than doing them manually, expecting the same remote/branch conventions and workflow as previous sessions ("push my code to github as last time"). Confidence: 0.6
