@@ -11,7 +11,9 @@
               "fieldLabel": "Screenshot(s)",
               "fieldType": "file",
               "fieldName": "screenshot",
-              "requiredField": true
+              "requiredField": true,
+              "multipleFiles": true,
+              "acceptFileTypes": ".png, .jpg, .jpeg, .webp, .gif, .bmp"
             },
             {
               "fieldLabel": "Additional context / steps",
@@ -33,6 +35,7 @@
             }
           ]
         },
+        "responseMode": "lastNode",
         "options": {
           "path": "report-bug-screenshot"
         }
@@ -137,7 +140,7 @@
         "nodeCredentialType": "groqApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: $('Normalize Screenshots').first().json.groq_vision_model, temperature: 0.2, max_completion_tokens: 2048, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: $('Normalize Screenshots').first().json.vision_system_prompt }, { role: 'user', content: [ { type: 'text', text: $('Normalize Screenshots').first().json.vision_user_prompt }, { type: 'image_url', image_url: { url: 'data:' + ($('Normalize Screenshots').first().binary[$('Normalize Screenshots').first().json.primary_binary_property].mimeType || 'image/png') + ';base64,' + $('Normalize Screenshots').first().binary[$('Normalize Screenshots').first().json.primary_binary_property].data } } ] } ] }) }}",
+        "jsonBody": "={{ JSON.stringify({ model: $('Normalize Screenshots').first().json.groq_vision_model, temperature: 0.2, max_completion_tokens: 800, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: $('Normalize Screenshots').first().json.vision_system_prompt }, { role: 'user', content: [ { type: 'text', text: $('Normalize Screenshots').first().json.vision_user_prompt }, { type: 'image_url', image_url: { url: 'data:' + ($('Normalize Screenshots').first().binary[$('Normalize Screenshots').first().json.primary_binary_property].mimeType || 'image/png') + ';base64,' + $('Normalize Screenshots').first().binary[$('Normalize Screenshots').first().json.primary_binary_property].data } } ] } ] }) }}",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -150,7 +153,7 @@
       "name": "Groq Vision Analysis",
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 3000,
+      "waitBetweenTries": 5000,
       "onError": "continueRegularOutput",
       "credentials": {
         "groqApi": {
@@ -162,7 +165,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Parse and validate the Groq vision response into a bug draft + duplicate-search JQL.\nvar res = $input.first().json || {};\nvar ctx = $('Normalize Screenshots').first().json;\nfunction fail(code, detail) {\n  return [{ json: Object.assign({}, ctx, { outcome: 'error', error_code: code, error_details: String(detail || '').substring(0, 300), bug: null }) }];\n}\nif (res.error) {\n  var m = typeof res.error === 'string' ? res.error : (res.error.message || JSON.stringify(res.error));\n  var auth = /401|403|invalid api key|unauthor/i.test(m);\n  return fail(auth ? 'GROQ_AUTH_FAILED' : 'VISION_MODEL_FAILED', m);\n}\nvar content = res.choices && res.choices[0] && res.choices[0].message && res.choices[0].message.content;\nif (content && typeof content === 'object') content = JSON.stringify(content);\nif (!content) return fail('VISION_EMPTY_RESPONSE', 'Groq returned no message content');\nvar bug;\ntry {\n  var s = String(content).replace(/^\\s*```(?:json)?/i, '').replace(/```\\s*$/, '').trim();\n  bug = JSON.parse(s);\n} catch (e) { return fail('VISION_INVALID_JSON', 'Vision output is not valid JSON: ' + e.message); }\nif (!bug || typeof bug !== 'object' || !bug.summary) return fail('VISION_INVALID_JSON', 'Vision JSON is missing a summary');\nfunction text(v) { return v === undefined || v === null ? '' : (typeof v === 'string' ? v.trim() : (Array.isArray(v) ? v.join(', ') : String(v))); }\nvar summary = text(bug.summary).substring(0, 250);\nvar words = summary.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\\s+/).filter(function (w) { return w.length > 3; }).slice(0, 6);\nvar jqlText = words.length\n  ? words.map(function (k) { return 'summary ~ \"' + k + '\"'; }).join(' OR ')\n  : 'summary ~ \"' + summary.replace(/\"/g, '') + '\"';\nvar jql = 'project = \"' + ctx.jira_project_key + '\" AND issuetype = Bug AND (' + jqlText + ')';\nreturn [{ json: Object.assign({}, ctx, {\n  outcome: 'proceed',\n  bug: {\n    summary: summary,\n    description: text(bug.description),\n    steps_to_reproduce: text(bug.steps_to_reproduce),\n    expected_result: text(bug.expected_result),\n    actual_result: text(bug.actual_result),\n    severity: text(bug.severity) || 'Major',\n    priority: text(bug.priority) || 'Medium',\n    environment: text(bug.environment) || text(ctx.environment),\n    labels: Array.isArray(bug.labels) ? bug.labels : []\n  },\n  duplicate_jql: jql\n}) }];\n"
+        "jsCode": "// Parse and validate the Groq vision response into a bug draft + duplicate-search JQL.\nvar res = $input.first().json || {};\nvar ctx = $('Normalize Screenshots').first().json;\nfunction fail(code, detail) {\n  return [{ json: Object.assign({}, ctx, { outcome: 'error', error_code: code, error_details: String(detail || '').substring(0, 300), bug: null }) }];\n}\nif (res.error) {\n  var eobj = (res.error && typeof res.error === 'object') ? res.error : {};\n  var m = typeof res.error === 'string' ? res.error : (eobj.message || eobj.description || JSON.stringify(res.error));\n  var auth = /401|403|invalid api key|unauthor/i.test(m);\n  // Groq 429: \"The service is receiving too many requests from you\" / \"Request too large ... reduce max_tokens\"\n  var rate = /429|too many requests|rate limit|request too large|reduce max_tokens|tokens per minute/i.test(m);\n  if (auth) return fail('GROQ_AUTH_FAILED', m);\n  if (rate) return fail('VISION_RATE_LIMITED', m);\n  return fail('VISION_MODEL_FAILED', m);\n}\nvar content = res.choices && res.choices[0] && res.choices[0].message && res.choices[0].message.content;\nif (content && typeof content === 'object') content = JSON.stringify(content);\nif (!content) return fail('VISION_EMPTY_RESPONSE', 'Groq returned no message content');\nvar bug;\ntry {\n  var s = String(content).replace(/^\\s*```(?:json)?/i, '').replace(/```\\s*$/, '').trim();\n  bug = JSON.parse(s);\n} catch (e) { return fail('VISION_INVALID_JSON', 'Vision output is not valid JSON: ' + e.message); }\nif (!bug || typeof bug !== 'object' || !bug.summary) return fail('VISION_INVALID_JSON', 'Vision JSON is missing a summary');\nfunction text(v) { return v === undefined || v === null ? '' : (typeof v === 'string' ? v.trim() : (Array.isArray(v) ? v.join(', ') : String(v))); }\nvar summary = text(bug.summary).substring(0, 250);\nvar words = summary.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\\s+/).filter(function (w) { return w.length > 3; }).slice(0, 6);\nvar jqlText = words.length\n  ? words.map(function (k) { return 'summary ~ \"' + k + '\"'; }).join(' OR ')\n  : 'summary ~ \"' + summary.replace(/\"/g, '') + '\"';\nvar jql = 'project = \"' + ctx.jira_project_key + '\" AND issuetype = Bug AND (' + jqlText + ')';\nreturn [{ json: Object.assign({}, ctx, {\n  outcome: 'proceed',\n  bug: {\n    summary: summary,\n    description: text(bug.description),\n    steps_to_reproduce: text(bug.steps_to_reproduce),\n    expected_result: text(bug.expected_result),\n    actual_result: text(bug.actual_result),\n    severity: text(bug.severity) || 'Major',\n    priority: text(bug.priority) || 'Medium',\n    environment: text(bug.environment) || text(ctx.environment),\n    labels: Array.isArray(bug.labels) ? bug.labels : []\n  },\n  duplicate_jql: jql\n}) }];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -251,9 +254,8 @@
     },
     {
       "parameters": {
-        "resume": "form",
-        "formTitle": "Approve Jira bug creation",
-        "formDescription": "=Approve or reject this AI-drafted Jira bug.\n\nSummary: {{ $('Evaluate Duplicates').first().json.bug.summary }}\nSeverity: {{ $('Evaluate Duplicates').first().json.bug.severity }}\nPriority: {{ $('Evaluate Duplicates').first().json.bug.priority }}\n\nPossible duplicates: {{ $('Evaluate Duplicates').first().json.duplicate_candidates.map(function (d) { return d.key + ' - ' + d.summary; }).join('; ') || 'none found' }}",
+        "operation": "page",
+        "defineForm": "fields",
         "formFields": {
           "values": [
             {
@@ -271,21 +273,29 @@
                 ]
               },
               "requiredField": true
+            },
+            {
+              "fieldLabel": "Note for the bug (optional)",
+              "fieldType": "textarea",
+              "fieldName": "approval_note",
+              "requiredField": false
             }
           ]
         },
-        "respond": "lastNode",
-        "options": {}
+        "options": {
+          "formTitle": "Review & approve the bug",
+          "formDescription": "=Approve or reject this AI-drafted Jira bug.\n\nSummary: {{ $('Evaluate Duplicates').first().json.bug.summary }}\nSeverity: {{ $('Evaluate Duplicates').first().json.bug.severity }}\nPriority: {{ $('Evaluate Duplicates').first().json.bug.priority }}\n\nPossible duplicates: {{ $('Evaluate Duplicates').first().json.duplicate_candidates.map(function (d) { return d.key + ' - ' + d.summary; }).join('; ') || 'none found' }}",
+          "buttonLabel": "Submit decision"
+        }
       },
-      "type": "n8n-nodes-base.wait",
-      "typeVersion": 1.1,
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.3,
       "position": [
         960,
         300
       ],
       "id": "00000000-0000-4000-8000-000000000010",
-      "name": "Human Approval",
-      "webhookId": "00000000-0000-4000-8000-000000000091"
+      "name": "Human Approval"
     },
     {
       "parameters": {
@@ -578,7 +588,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Compose the final result for every outcome. Never report full success unless both the\n// Jira issue AND the original screenshot attachment are confirmed.\nvar j = $input.first().json || {};\nfunction context() {\n  try { return $('Evaluate Duplicates').first().json; } catch (e1) {}\n  try { return $('Normalize Screenshots').first().json; } catch (e2) {}\n  return {};\n}\nvar c = context();\nvar key = j.issue_key || c.issue_key || '';\nvar url = j.issue_url || c.issue_url || '';\nvar bug = j.bug || c.bug || {};\nvar summary = bug.summary || '';\nvar outcome = j.outcome || 'error';\nvar lines = [];\n\nif (outcome === 'success') {\n  var names = (j.uploaded_attachments || []).map(function (a) { return a.file || a.filename; });\n  names = names.concat(j.already_attached || []);\n  lines.push('Jira Bug Created Successfully');\n  lines.push('');\n  lines.push('Issue: ' + key);\n  lines.push('Summary: ' + summary);\n  lines.push('Priority: ' + (bug.priority || ''));\n  lines.push('Screenshot: ' + (names.join(', ') || 'n/a'));\n  lines.push('Attachment Status: ' + (names.length ? 'Successfully uploaded' : 'No screenshots attached'));\n  lines.push('Jira URL: ' + url);\n} else if (outcome === 'partial') {\n  lines.push('PARTIAL SUCCESS - Jira bug created, screenshot attachment FAILED');\n  lines.push('');\n  lines.push('Issue: ' + key);\n  lines.push('Summary: ' + summary);\n  lines.push('Jira URL: ' + url);\n  lines.push('Attachment Status: FAILED (' + (j.error_code || 'ATTACHMENT_UPLOAD_FAILED') + ')');\n  if ((j.failed_attachments || []).length) lines.push('Failed files: ' + j.failed_attachments.map(function (f) { return f.file; }).join(', '));\n  lines.push('');\n  lines.push('The Jira bug EXISTS but the screenshot was not attached. Do NOT create another bug.');\n  lines.push('Safe retry: resubmit the same screenshot using the \"Re-attach only to existing Jira key\" field with key ' + key + '.');\n} else if (outcome === 'rejected') {\n  lines.push('Report rejected by the reviewer. No Jira issue was created and nothing was attached.');\n} else {\n  lines.push('Bug report could not be completed.');\n  lines.push('Error: ' + (j.error_code || c.error_code || 'UNKNOWN_ERROR'));\n  if (j.error_details) lines.push('Details: ' + j.error_details);\n  if (key) lines.push('Jira issue: ' + key + ' ' + url);\n}\nreturn [{ json: { output: lines.join('\\n'), outcome: outcome, issue_key: key, issue_url: url, attachment_status: j.attachment_status || '' } }];\n"
+        "jsCode": "// Compose the final result for every outcome. Never report full success unless both the\n// Jira issue AND the original screenshot attachment are confirmed.\nvar j = $input.first().json || {};\nfunction context() {\n  try { return $('Evaluate Duplicates').first().json; } catch (e1) {}\n  try { return $('Normalize Screenshots').first().json; } catch (e2) {}\n  return {};\n}\nvar c = context();\nvar key = j.issue_key || c.issue_key || '';\nvar url = j.issue_url || c.issue_url || '';\nvar bug = j.bug || c.bug || {};\nvar summary = bug.summary || '';\nvar outcome = j.outcome || 'error';\nvar errorCode = j.error_code || c.error_code || '';\nvar lines = [];\n\nif (outcome === 'success') {\n  var names = (j.uploaded_attachments || []).map(function (a) { return a.file || a.filename; });\n  names = names.concat(j.already_attached || []);\n  lines.push('Jira Bug Created Successfully');\n  lines.push('');\n  lines.push('Issue: ' + key);\n  lines.push('Summary: ' + summary);\n  lines.push('Priority: ' + (bug.priority || ''));\n  lines.push('Screenshot: ' + (names.join(', ') || 'n/a'));\n  lines.push('Attachment Status: ' + (names.length ? 'Successfully uploaded' : 'No screenshots attached'));\n  lines.push('Jira URL: ' + url);\n} else if (outcome === 'partial') {\n  lines.push('PARTIAL SUCCESS - Jira bug created, screenshot attachment FAILED');\n  lines.push('');\n  lines.push('Issue: ' + key);\n  lines.push('Summary: ' + summary);\n  lines.push('Jira URL: ' + url);\n  lines.push('Attachment Status: FAILED (' + (errorCode || 'ATTACHMENT_UPLOAD_FAILED') + ')');\n  if ((j.failed_attachments || []).length) lines.push('Failed files: ' + j.failed_attachments.map(function (f) { return f.file; }).join(', '));\n  lines.push('');\n  lines.push('The Jira bug EXISTS but the screenshot was not attached. Do NOT create another bug.');\n  lines.push('Safe retry: resubmit the same screenshot using the \"Re-attach only to existing Jira key\" field with key ' + key + '.');\n} else if (outcome === 'rejected') {\n  lines.push('Report rejected by the reviewer. No Jira issue was created and nothing was attached.');\n} else if (errorCode === 'VISION_RATE_LIMITED') {\n  lines.push('The Groq vision request could not be completed.');\n  lines.push('Reason: the Groq service is rate-limited (too many requests / output-token limit). This is temporary.');\n  lines.push('Action: wait about a minute, then submit the screenshot again.');\n  lines.push('(No Jira issue was created.)');\n  if (j.error_details) lines.push('Details: ' + j.error_details);\n} else {\n  lines.push('Bug report could not be completed.');\n  lines.push('Error: ' + (errorCode || 'UNKNOWN_ERROR'));\n  if (j.error_details) lines.push('Details: ' + j.error_details);\n  if (key) lines.push('Jira issue: ' + key + ' ' + url);\n}\nreturn [{ json: { output: lines.join('\\n'), outcome: outcome, issue_key: key, issue_url: url, attachment_status: j.attachment_status || '' } }];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -591,50 +601,21 @@
     },
     {
       "parameters": {
-        "assignments": {
-          "assignments": [
-            {
-              "id": "o1",
-              "name": "output",
-              "type": "string",
-              "value": "={{ $json.output }}"
-            },
-            {
-              "id": "o2",
-              "name": "outcome",
-              "type": "string",
-              "value": "={{ $json.outcome }}"
-            },
-            {
-              "id": "o3",
-              "name": "issue_key",
-              "type": "string",
-              "value": "={{ $json.issue_key }}"
-            },
-            {
-              "id": "o4",
-              "name": "issue_url",
-              "type": "string",
-              "value": "={{ $json.issue_url }}"
-            },
-            {
-              "id": "o5",
-              "name": "attachment_status",
-              "type": "string",
-              "value": "={{ $json.attachment_status }}"
-            }
-          ]
-        },
-        "options": {}
+        "operation": "completion",
+        "respondWith": "showText",
+        "responseText": "={{ '<pre style=\"white-space:pre-wrap;font-family:inherit;font-size:14px;line-height:1.5;color:#111;\">' + $'Build Final Response'.first().json.output + '</pre>' }}",
+        "options": {
+          "formTitle": "Bug report result"
+        }
       },
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.3,
       "position": [
         3640,
         360
       ],
       "id": "00000000-0000-4000-8000-000000000023",
-      "name": "Return Final Result"
+      "name": "Show Result"
     }
   ],
   "pinData": {},
@@ -916,7 +897,7 @@
       "main": [
         [
           {
-            "node": "Return Final Result",
+            "node": "Show Result",
             "type": "main",
             "index": 0
           }
@@ -965,7 +946,7 @@
         "00000000-0000-4000-8000-000000000011",
         "00000000-0000-4000-8000-000000000021"
       ],
-      "description": "Search for likely duplicate bugs, then pause for an explicit approve/reject form"
+      "description": "Search for likely duplicate bugs, then a second form page for an explicit approve/reject"
     },
     {
       "id": "00000000-0000-4000-8000-000000000804",
@@ -990,7 +971,7 @@
         "00000000-0000-4000-8000-000000000022",
         "00000000-0000-4000-8000-000000000023"
       ],
-      "description": "Report full success, partial success or failure with a safe retry hint"
+      "description": "Report full success, partial success or failure with a safe retry hint on the form's ending page"
     }
   ],
   "id": "Q4BugShotAgent01",

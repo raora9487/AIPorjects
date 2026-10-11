@@ -71,16 +71,23 @@ screenshot into a Jira Bug **and attaches the original image** to that bug.
 
 Execution order implemented by the workflow:
 
-Screenshot Upload → Validate Screenshot → Groq Vision Analysis → Validate AI
-Bug Report → Search Duplicate Bugs → Human Approval → Create Jira Bug → Attach
-Original Screenshot → Verify Attachment → Return Final Result
+Screenshot Upload (form page 1) → Validate Screenshot → Groq Vision Analysis →
+Validate AI Bug Report → Search Duplicate Bugs → Human Approval (form page 2) →
+Create Jira Bug → Attach Original Screenshot → Verify Attachment → Show Result
+(form ending page)
+
+The approval is a **second form page** (an `n8n Form` node) shown in the same
+browser session, and the final result is the form's **ending page**. The trigger
+responds *when the last node finishes* so each page chains into the next without
+the form hanging.
 
 Key guarantees:
 
 - The **original, unmodified** screenshot binary is preserved end to end. It is
   never replaced by an AI-generated image or a text description, and it is not
   discarded when the AI response is parsed.
-- The bug is only created after an explicit human approval (a Wait node form).
+- The bug is only created after an explicit human approval on a second form page
+  (approve/reject dropdown), so nothing is created without a person saying yes.
 - The attachment uses
   `POST /rest/api/3/issue/{issueIdOrKey}/attachments` as `multipart/form-data`
   (field name `file`) with the required `X-Atlassian-Token: no-check` header.
@@ -114,6 +121,9 @@ Non-secret settings (already filled in the `Normalize Screenshots` Code node):
 - `jira_base_url` = `https://raora9487.atlassian.net`
 - `jira_project_key` = `KAN` (My Software Team, project id 10001)
 - `groq_vision_model` = `qwen/qwen3.8-27b`
+- `max_completion_tokens` = `800` in the Groq request, kept under the tenant's
+  Groq output-tokens-per-minute limit (1000) so the call isn't pre-rejected with
+  a `429`. If you see a rate-limit message, wait about a minute and resubmit.
 
 The `Create Jira Bug` node is set to project `KAN` and the `Bug` issue type
 (id 10042).
