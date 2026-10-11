@@ -1,0 +1,341 @@
+{
+  "name": "Screenshot to Bug Reporter AI Agent (Groq + Jira) - Auto Create",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Screenshot to Bug Reporter AI",
+        "formDescription": "Upload a screenshot. Groq will analyze it and the workflow will create a Jira issue for every submission, including items flagged for manual review.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Screenshot",
+              "fieldType": "file",
+              "multipleFiles": false,
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Application or feature"
+            },
+            {
+              "fieldLabel": "Environment (QA/UAT/Production)"
+            },
+            {
+              "fieldLabel": "Steps to reproduce (if known)",
+              "fieldType": "textarea"
+            },
+            {
+              "fieldLabel": "Expected behavior (if known)",
+              "fieldType": "textarea"
+            },
+            {
+              "fieldLabel": "Actual behavior (if known)",
+              "fieldType": "textarea"
+            }
+          ]
+        },
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "b2e8de5b-a3c1-48e0-be20-3620d0a8e9d6",
+      "name": "Upload Screenshot",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        -4320,
+        192
+      ],
+      "webhookId": "cd27278b-758b-4b3c-bc56-5750dd6189d9"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst out = [];\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const binaryKeys = Object.keys(item.binary || {});\n  if (!binaryKeys.length) throw new Error('No screenshot binary was received. Check the upload form file field.');\n  const key = binaryKeys[0];\n  const meta = item.binary[key];\n  const mimeType = meta.mimeType || 'image/png';\n  if (!['image/png', 'image/jpeg', 'image/webp'].includes(mimeType)) {\n    throw new Error(`Unsupported image type: ${mimeType}. Upload PNG, JPEG, or WebP.`);\n  }\n  const buffer = await this.helpers.getBinaryDataBuffer(i, key);\n  item.json._firstImage = {\n    binaryProperty: 'screenshot',\n    fileName: meta.fileName || 'screenshot.png',\n    mimeType,\n    imageBase64: buffer.toString('base64')\n  };\n  item.json._allImagesCount = 1;\n  item.binary = { screenshot: meta };\n  out.push(item);\n}\nreturn out;"
+      },
+      "id": "dfe25073-8cab-4ba6-8c4f-30eab7b7411b",
+      "name": "Validate & Encode Screenshot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4096,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { model: 'qwen/qwen3.8-27b', temperature: 0.1, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: 'You are a careful QA engineer analyzing screenshots. Return only valid JSON. Do not invent root causes, steps, expected behavior, or environment details. Separate observations from assumptions. If evidence is insufficient, set isPotentialBug=false and requiresManualReview=true. Never include secrets visible in the screenshot.' }, { role: 'user', content: [ { type: 'text', text: 'Analyze the attached application screenshot and supplied context. Generate a Jira-ready bug report with fields: isPotentialBug (boolean), confidence (0-1), summary, description, stepsToReproduce (array), expectedResult, actualResult, severity (Blocker/Critical/Major/Minor/Trivial/Unknown), priority (Highest/High/Medium/Low/Lowest/Unknown), environment, component, evidence (array), assumptions (array), missingInformation (array), recommendedLabels (array), requiresManualReview (boolean). Do not fabricate information. Context: ' + JSON.stringify({ applicationFeature: $json.applicationFeature || 'Not provided', environment: $json.environment || 'Unknown', stepsToReproduce: $json.stepsToReproduce || 'Not provided', expectedBehavior: $json.expectedBehavior || 'Not provided', actualBehavior: $json.actualBehavior || 'Not provided' }) }, { type: 'image_url', image_url: { url: 'data:' + $json._firstImage.mimeType + ';base64,' + $json._firstImage.imageBase64 } } ] } ] } }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "8c80ce53-ab53-402b-ae26-1859df2e66e1",
+      "name": "Analyze Screenshot with Groq",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3872,
+        112
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "groqApi": {
+          "id": "sKYrbiJiFdd9B8D8",
+          "name": "Groq account"
+        }
+      },
+      "notes": "Uses existing Groq account credential. Model set to qwen/qwen3.8-27b; confirm it is enabled for your Groq account. This model supports image input according to current Groq documentation."
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "71002330-7681-4971-a6dc-d807d82de23a",
+      "name": "Keep Screenshot + Analysis",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -3648,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst response = item.json;\nif (response.error) throw new Error('Groq API error (' + (response.error.code || response.error.type || 'unknown') + '): ' + (response.error.message || JSON.stringify(response.error)));\nlet raw = response.choices?.[0]?.message?.content;\nif (typeof raw !== 'string' || !raw.trim()) throw new Error('Groq returned no usable message content. Check the model and API response.');\nlet report;\ntry { report = JSON.parse(raw); } catch (e) { throw new Error('Groq response was not valid JSON: ' + e.message); }\nfor (const key of ['summary', 'description']) {\n  if (report[key] === undefined || report[key] === null || String(report[key]).trim() === '') {\n    throw new Error(`AI report is missing required field: ${key}`);\n  }\n}\nreport.confidence = Number(report.confidence ?? 0);\nreport.requiresManualReview = Boolean(report.requiresManualReview) || report.confidence < 0.65 || report.isPotentialBug === false;\nconst original = $('Validate & Encode Screenshot').first();\nitem.json.aiReport = report;\nitem.json._screenshotImages = original.json._screenshotImages || [original.json._firstImage];\nitem.json._firstImage = original.json._firstImage;\nitem.json.applicationFeature = original.json.applicationFeature || '';\nitem.json.environment = original.json.environment || 'Unknown';\nitem.json._jiraDescription = `AI Screenshot Analysis\\n\\nDescription: ${report.description}\\nActual Result: ${report.actualResult || 'Not provided'}\\nExpected Result: ${report.expectedResult || 'Not provided'}\\nSteps to Reproduce: ${(report.stepsToReproduce || []).join(' | ') || 'Not provided'}\\nEvidence: ${(report.evidence || []).join(' | ') || 'See attached screenshot'}\\nAssumptions: ${(report.assumptions || []).join(' | ') || 'None stated'}\\nMissing Information: ${(report.missingInformation || []).join(' | ') || 'None stated'}\\nEnvironment: ${item.json.environment}\\nAI confidence: ${report.confidence}\\nPotential bug: ${report.isPotentialBug}\\nManual review recommended: ${report.requiresManualReview}`;\nreturn [{json: item.json, binary: original.binary}];"
+      },
+      "id": "b370d7de-d4b5-4ea1-9e2d-52721a60b90a",
+      "name": "Validate AI Bug Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3424,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://raora9487.atlassian.net/rest/api/3/issue",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraSoftwareCloudApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({\n  fields: {\n    project: {\n      key: 'KAN'\n    },\n    issuetype: {\n      name: 'Bug'\n    },\n    summary: $json.aiReport.summary,\n    description: {\n      type: 'doc',\n      version: 1,\n      content: [\n        {\n          type: 'paragraph',\n          content: [\n            {\n              type: 'text',\n              text: $json.aiReport.description || 'AI-generated bug report'\n            }\n          ]\n        },\n        {\n          type: 'paragraph',\n          content: [\n            {\n              type: 'text',\n              text: 'Actual result: ' + ($json.aiReport.actualResult || 'Not provided')\n            }\n          ]\n        },\n        {\n          type: 'paragraph',\n          content: [\n            {\n              type: 'text',\n              text: 'Expected result: ' + ($json.aiReport.expectedResult || 'Not provided')\n            }\n          ]\n        },\n        {\n          type: 'paragraph',\n          content: [\n            {\n              type: 'text',\n              text: 'Steps to reproduce: ' + (($json.aiReport.stepsToReproduce || []).join(' | ') || 'Not provided')\n            }\n          ]\n        },\n        {\n          type: 'paragraph',\n          content: [\n            {\n              type: 'text',\n              text: 'Evidence: ' + (($json.aiReport.evidence || []).join(' | ') || 'See attached screenshot')\n            }\n          ]\n        },\n        {\n          type: 'paragraph',\n          content: [\n            {\n              type: 'text',\n              text: 'Assumptions: ' + (($json.aiReport.assumptions || []).join(' | ') || 'None stated')\n            }\n          ]\n        },\n        {\n          type: 'paragraph',\n          content: [\n            {\n              type: 'text',\n              text: 'Environment: ' + ($json.environment || 'Unknown')\n            }\n          ]\n        }\n      ]\n    },\n    labels: $json.aiReport.requiresManualReview\n      ? ['ai-generated', 'review-required']\n      : ['ai-generated']\n  }\n}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "39713203-c099-46f3-903b-21c43b1a6225",
+      "name": "Create Jira Bug",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3200,
+        112
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "FvHgFUQJrX8Dev9i",
+          "name": "Jira SW Cloud account"
+        }
+      },
+      "notes": "Select the existing n8n credential named 'Jira SW Cloud account'. Do not create a new credential. If import does not resolve it automatically, open this node and select the existing credential. Creates a Jira issue for every screenshot submission. Reports flagged for uncertainty receive the review-required label. Replace YOUR-DOMAIN and YOUR_PROJECT_KEY, and select your Jira Cloud credential. Response error handling uses standard HTTP Request behavior; inspect the node's response body if Jira returns an API error."
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "48e3d155-2991-43fe-9ba8-7c4c9149fafd",
+      "name": "Keep Screenshot + Jira Issue",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -2976,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://raora9487.atlassian.net/rest/api/3/issue/' + $json.key + '/attachments' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraSoftwareCloudApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Atlassian-Token",
+              "value": "no-check"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "screenshot"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "971b7705-68e4-43ec-9e1c-1b6a04208581",
+      "name": "Attach Screenshot to Jira",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2752,
+        192
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "FvHgFUQJrX8Dev9i",
+          "name": "Jira SW Cloud account"
+        }
+      },
+      "notes": "Select the existing n8n credential named 'Jira SW Cloud account'. Do not create a new credential. If import does not resolve it automatically, open this node and select the existing credential. Replace YOUR-DOMAIN in the URL expression. Select your Jira Cloud credential. The original uploaded screenshot should be attached as binary property screenshot."
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $input.first();\nconst issue = $('Create Jira Bug').first().json;\nconst report = $('Validate AI Bug Report').first().json.aiReport;\nconst base = 'https://YOUR-DOMAIN.atlassian.net';\nconst issueKey = issue.key;\nif (!issueKey) throw new Error('Jira did not return an issue key. Issue creation could not be confirmed.');\nconst attachmentResponse = result.json;\nconst attachmentSucceeded = Array.isArray(attachmentResponse) ? attachmentResponse.length > 0 : Boolean(attachmentResponse && !attachmentResponse.error && !attachmentResponse.message?.toLowerCase?.().includes('error'));\nreturn [{json: {status: attachmentSucceeded ? 'created_attachment_response_received' : 'created_but_attachment_needs_review', issueKey, issueUrl: `${base}/browse/${issueKey}`, summary: report.summary, severity: report.severity || 'Unknown', priority: report.priority || 'Unknown', manualReviewRecommended: Boolean(report.requiresManualReview), attachmentFileName: $('Validate & Encode Screenshot').first().json._firstImage?.fileName || 'screenshot', attachmentStatus: attachmentSucceeded ? 'Upload response received; verify attachment in Jira' : 'Attachment may have failed; inspect Jira response and retry against this existing issue', jiraAttachmentResponse: attachmentResponse}}];"
+      },
+      "id": "615bc3d2-f29b-4d2f-bd37-63b78576eb56",
+      "name": "Return Jira Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2528,
+        192
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Upload Screenshot": {
+      "main": [
+        [
+          {
+            "node": "Validate & Encode Screenshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Encode Screenshot": {
+      "main": [
+        [
+          {
+            "node": "Analyze Screenshot with Groq",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Keep Screenshot + Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Screenshot with Groq": {
+      "main": [
+        [
+          {
+            "node": "Keep Screenshot + Analysis",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Keep Screenshot + Analysis": {
+      "main": [
+        [
+          {
+            "node": "Validate AI Bug Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate AI Bug Report": {
+      "main": [
+        [
+          {
+            "node": "Create Jira Bug",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Keep Screenshot + Jira Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Jira Bug": {
+      "main": [
+        [
+          {
+            "node": "Keep Screenshot + Jira Issue",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Keep Screenshot + Jira Issue": {
+      "main": [
+        [
+          {
+            "node": "Attach Screenshot to Jira",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Screenshot to Jira": {
+      "main": [
+        [
+          {
+            "node": "Return Jira Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "9fd1872f-ecec-4344-ba20-99f2266480b9",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0e3597cc68593cd4a058ec6aeed195b23af47645ee6ee9fddd975c850891e290"
+  },
+  "nodeGroups": [],
+  "id": "dovXitP8BzeSr8Ad",
+  "tags": []
+}
