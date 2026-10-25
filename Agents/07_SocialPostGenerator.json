@@ -1,0 +1,262 @@
+{
+  "name": "07_SocialPostGenerator",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "7bf9dcd9-fc67-4957-ac75-21d62151cc25",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.5,
+      "position": [
+        -720,
+        -128
+      ],
+      "webhookId": "44ab4e66-797a-4c1c-a419-71be3c5a84ad"
+    },
+    {
+      "parameters": {
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Generate one fresh, specific Linkedin post topic for a software testing and AI-in-QA audience. Avoid generic themes. Return the topic, a one-line angle, and the target reader. You are a content strategist for a software testing community. Output only what the schema asks for."
+        }
+      },
+      "id": "196a5627-cdc4-437c-96e1-9381311a2028",
+      "name": "Content Topic Generator",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -528,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.7-flash",
+        "options": {}
+      },
+      "id": "a9ee87de-f8eb-4fd9-8918-6a2c2ff061f3",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        -528,
+        48
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\":\"object\",\n  \"properties\":{\n    \"topic\":{\"type\":\"string\"},\n    \"angle\":{\"type\":\"string\"},\n    \"audience\":{\"type\":\"string\"}\n   },\n  \"required\":[\"topic\",\"angle\",\"audience\"]\n}"
+      },
+      "id": "0d9b6433-e7f0-4e4c-ae52-b4c2353cacef",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        -336,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Write a LinkedIn post.\n\nTopic:{{ $json.output.topic }}\nAngle:{{ $json.output.angle }}\nAudience: {{ $json.output.audience }}\n\nRules: no contradictions, no emojis, plain declarative sentences, short paragraphs, one clear takeaway, 150-250 words. Also produce a post title and a one sentence image prompt describing a clean technical illustration for this post.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You need to write LinkedIn posts for a software testing audience. Return only the fields required by the schema."
+        }
+      },
+      "id": "730b565b-280f-45fc-b65b-1cbdbc2b2fc1",
+      "name": "Content Creator LinkedIn Post",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -192,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "d82d0c95-512f-4515-aed8-98e89628e840",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -160,
+        48
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\":\"object\",\n  \"properties\":{\n    \"post_title\":{\"type\":\"string\"},\n    \"post_body\":{\"type\":\"string\"},\n    \"image_prompt\":{\"type\":\"string\"}\n   },\n  \"required\":[\"post_title\",\"post_body\",\"image_prompt\"]\n}"
+      },
+      "id": "3c922aa2-5570-4d4e-bf7c-18816af09283",
+      "name": "Structured Output Parser1",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        16,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/interactions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gemini-nano-banana-2.1\",\n  \"input\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"{{ $json.output.image_prompt }}\"\n    }\n  ]\n} ",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        176,
+        -144
+      ],
+      "id": "8edb3988-f9c3-4224-9adb-2716a1eadd9b",
+      "name": "Call the Google Image Creator",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "NoOs3YiXLsKFb3Qy",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "Content Topic Generator": [
+      {
+        "json": {
+          "output": {
+            "topic": "Silent Regression Masking: The Underreported Failure Mode of 'Self-Healing' Test Suites",
+            "angle": "Self-healing automation doesn't just fix brittle locators—it silently adapts to unintended UX regressions, turning critical bugs into false-positive passing builds.",
+            "audience": "Senior QA Automation Engineers and QA Leads adopting AI-driven testing platforms."
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Content Topic Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Content Topic Generator": {
+      "main": [
+        [
+          {
+            "node": "Content Creator LinkedIn Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Content Topic Generator",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Content Topic Generator",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Content Creator LinkedIn Post",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser1": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Content Creator LinkedIn Post",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Content Creator LinkedIn Post": {
+      "main": [
+        [
+          {
+            "node": "Call the Google Image Creator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "2a5c5335-13bb-44ec-955f-12281f3aaab2",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e447ef133ff27a97936c91cc5faca3bee9e717c850892cff21e12a411d98eaea"
+  },
+  "nodeGroups": [],
+  "id": "YMUEIFczGO0AUUks",
+  "tags": []
+}
